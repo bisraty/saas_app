@@ -22,13 +22,7 @@ export default function RootLayout({
   return (
     <html lang="en">
         <ClerkProvider
-        appearance={{
-          layout: {
-            socialButtonsVariant: "iconButton",
-            logoImageUrl: "/images/logo.svg",
-          },
-        }}
-        signUpForceRedirectUrl={"/"}
+       appearance={{ variables: { colorPrimary: '#fe5933' }} }
       >
       <body className={`${bricolage.variable} antialiased`}>
         <Navbar />
