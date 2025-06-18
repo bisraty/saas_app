@@ -30,7 +30,7 @@ export const configureAssistant = (voice: string, style: string) => {
       voiceId: voiceId,
       stability: 0.4,
       similarityBoost: 0.8,
-      speed: 1,
+      speed: 0.9,
       style: 0.5,
       useSpeakerBoost: true,
     },
@@ -54,8 +54,8 @@ export const configureAssistant = (voice: string, style: string) => {
         },
       ],
     },
-    clientMessages: [],
-    serverMessages: [],
+    clientMessages: undefined,
+    serverMessages: undefined,
   };
   return vapiAssistant;
 };

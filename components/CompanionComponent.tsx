@@ -20,6 +20,7 @@ const CompanionComponent = ({ companionId, subject, topic, name, userName, userI
     const [isSpeaking, setIsSpeaking] = useState(false);
     const [isMuted, setIsMuted] = useState(false);
     const [messages, setMessages] = useState<SavedMessage[]>([]);
+    const [isInitializing, setIsInitializing] = useState(false);
 
     const lottieRef = useRef<LottieRefCurrentProps>(null);
 
@@ -34,11 +35,15 @@ const CompanionComponent = ({ companionId, subject, topic, name, userName, userI
     }, [isSpeaking, lottieRef])
 
     useEffect(() => {
-        const onCallStart = () => setCallStatus(CallStatus.ACTIVE);
+        const onCallStart = () => {
+            setCallStatus(CallStatus.ACTIVE);
+            setIsMuted(false);
+        };
 
         const onCallEnd = () => {
             setCallStatus(CallStatus.FINISHED);
-            addToSessionHistory(companionId)
+            setIsMuted(false);
+            addToSessionHistory(companionId);
         }
 
         const onMessage = (message: Message) => {
@@ -51,7 +56,18 @@ const CompanionComponent = ({ companionId, subject, topic, name, userName, userI
         const onSpeechStart = () => setIsSpeaking(true);
         const onSpeechEnd = () => setIsSpeaking(false);
 
-        const onError = (error: Error) => console.log('Error', error);
+        const onError = (error: Error & { errorMsg?: string }) => {
+            console.log('Error', error);
+            if (error.errorMsg === 'Meeting has ended' || 
+                error.errorMsg?.includes('WebSocket') || 
+                error.errorMsg?.includes('connection') ||
+                error.errorMsg?.includes('ejection')) {
+                setCallStatus(CallStatus.FINISHED);
+                setIsMuted(false);
+                addToSessionHistory(companionId);
+                vapi.stop();
+            }
+        }
 
         vapi.on('call-start', onCallStart);
         vapi.on('call-end', onCallEnd);
@@ -68,25 +84,61 @@ const CompanionComponent = ({ companionId, subject, topic, name, userName, userI
             vapi.off('speech-start', onSpeechStart);
             vapi.off('speech-end', onSpeechEnd);
         }
-    }, []);
+    }, [companionId]);
 
-    const toggleMicrophone = () => {
-        const isMuted = vapi.isMuted();
-        vapi.setMuted(!isMuted);
-        setIsMuted(!isMuted)
+    const initializeDevices = async () => {
+        try {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const audioInputs = devices.filter(device => device.kind === 'audioinput');
+            if (audioInputs.length === 0) {
+                throw new Error('No audio input devices found');
+            }
+            return true;
+        } catch (error) {
+            console.error('Failed to initialize devices:', error);
+            return false;
+        }
     }
 
     const handleCall = async () => {
-        setCallStatus(CallStatus.CONNECTING)
+        try {
+            setIsInitializing(true);
+            setCallStatus(CallStatus.CONNECTING);
 
-        const assistantOverrides = {
-            variableValues: { subject, topic, style },
-            clientMessages: ["transcript"],
-            serverMessages: [],
+            const devicesInitialized = await initializeDevices();
+            if (!devicesInitialized) {
+                throw new Error('Failed to initialize audio devices');
+            }
+
+            const assistantOverrides = {
+                variableValues: { subject, topic, style },
+                clientMessages: undefined,
+                serverMessages: undefined,
+            }
+
+            await vapi.start(configureAssistant(voice, style), assistantOverrides);
+        } catch (error) {
+            console.error('Failed to start call:', error);
+            setCallStatus(CallStatus.INACTIVE);
+        } finally {
+            setIsInitializing(false);
         }
+    }
 
-        // @ts-expect-error
-        vapi.start(configureAssistant(voice, style), assistantOverrides)
+    const toggleMicrophone = async () => {
+        try {
+            if (callStatus !== CallStatus.ACTIVE || isInitializing) return;
+            
+            const isMuted = vapi.isMuted();
+            await vapi.setMuted(!isMuted);
+            setIsMuted(!isMuted);
+        } catch (error) {
+            console.error('Failed to toggle microphone:', error);
+            if (callStatus === CallStatus.ACTIVE) {
+                setCallStatus(CallStatus.INACTIVE);
+                vapi.stop();
+            }
+        }
     }
 
     const handleDisconnect = () => {
@@ -133,12 +185,20 @@ const CompanionComponent = ({ companionId, subject, topic, name, userName, userI
                             {isMuted ? 'Turn on microphone' : 'Turn off microphone'}
                         </p>
                     </button>
-                    <button className={cn('rounded-lg py-2 cursor-pointer transition-colors w-full text-white', callStatus ===CallStatus.ACTIVE ? 'bg-red-700' : 'bg-primary', callStatus === CallStatus.CONNECTING && 'animate-pulse')} onClick={callStatus === CallStatus.ACTIVE ? handleDisconnect : handleCall}>
+                    <button 
+                        className={cn(
+                            'rounded-lg py-2 cursor-pointer transition-colors w-full text-white',
+                            callStatus === CallStatus.ACTIVE ? 'bg-red-700' : 'bg-primary',
+                            (callStatus === CallStatus.CONNECTING || isInitializing) && 'animate-pulse'
+                        )} 
+                        onClick={callStatus === CallStatus.ACTIVE ? handleDisconnect : handleCall}
+                        disabled={isInitializing}
+                    >
                         {callStatus === CallStatus.ACTIVE
-                        ? "End Session"
-                        : callStatus === CallStatus.CONNECTING
-                            ? 'Connecting'
-                        : 'Start Session'
+                            ? "End Session"
+                            : callStatus === CallStatus.CONNECTING || isInitializing
+                                ? 'Initializing...'
+                                : 'Start Session'
                         }
                     </button>
                 </div>
@@ -153,7 +213,7 @@ const CompanionComponent = ({ companionId, subject, topic, name, userName, userI
                                     {
                                         name
                                             .split(' ')[0]
-                                            .replace('/[.,]/g, ','')
+                                            .replace(/[.,]/g, ',')
                                     }: {message.content}
                                 </p>
                             )
